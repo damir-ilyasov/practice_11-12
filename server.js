@@ -1,202 +1,249 @@
 const express = require('express');
 const { nanoid } = require('nanoid');
+const bcrypt = require('bcrypt');
 const cors = require('cors');
 
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
+
 const app = express();
 const port = 3000;
 
+// ─── In-memory хранилища ────────────────────────────────────────────────────
+let users = [];
 let products = [
     {
         id: nanoid(6),
-        name: 'Протеин Gold',
+        title: 'Протеин Gold',
         category: 'Спортпит',
         description: 'Белковая бомба',
-        price: 2990,
-        stock: 999,
-        rating: 4.8,
-        image: '/images/1.jpg'
+        price: 2990
     },
     {
         id: nanoid(6),
-        name: 'Протеин Дядя Ваня',
-        category: 'Спортпит',
-        description: 'Белковый набор',
-        price: 3990,
-        stock: 500,
-        rating: 4.9,
-        image: '/images/2.jpg'
-    },
-    {
-        id: nanoid(6),
-        name: 'Креатин Дядя Ваня',
+        title: 'Креатин Дядя Ваня',
         category: 'Спортпит',
         description: 'Мощная штучка',
-        price: 2000,
-        stock: 3,
-        rating: 5.0,
-        image: '/images/3.jpg'
+        price: 2000
     },
     {
         id: nanoid(6),
-        name: 'Креатин "Убийство"',
-        category: 'Спортпит',
-        description: 'Без комментариев',
-        price: 8900,
-        stock: 1000,
-        rating: 4.7,
-        image: '/images/4.jpg'
-    },
-    {
-        id: nanoid(6),
-        name: 'Протеиновый батончик(Гвоздь)',
-        category: 'Спортпит',
-        description: 'Залетает на ура',
-        price: 14990,
-        stock: 300,
-        rating: 4.9,
-        image: '/images/5.jpg'
-    },
-    {
-        id: nanoid(6),
-        name: 'Штанга',
-        category: 'спорт-инвентарь',
+        title: 'Штанга',
+        category: 'Спорт-инвентарь',
         description: '20 kg',
-        price: 1290,
-        stock: 10000,
-        rating: 4.9,
-        image: '/images/6.jpg'
-    },
-    {
-        id: nanoid(6),
-        name: 'Тренболон',
-        category: 'Спортпит',
-        description: 'Для детей',
-        price: 12900,
-        stock: 200,
-        rating: 4.6,
-        image: '/images/7.jpg'
-    },
-    {
-        id: nanoid(6),
-        name: 'Шейкер',
-        category: 'Спортпит',
-        description: 'Патимейкер',
-        price: 24900,
-        stock: 150,
-        rating: 4.8,
-        image: '/images/8.jpg'
-    },
-    {
-        id: nanoid(6),
-        name: 'Проетин Kolorad',
-        category: 'Спортпит',
-        description: 'Вкусно',
-        price: 1990,
-        stock: 5000,
-        rating: 4.7,
-        image: '/images/9.jpg'
-    },
-    {
-        id: nanoid(6),
-        name: 'Белковый изолят',
-        category: 'Спортпит',
-        description: 'Для кабанов',
-        price: 3990,
-        stock: 400,
-        rating: 4.8,
-        image: '/images/10.jpg'
+        price: 1290
     }
 ];
 
-app.use(cors());
-app.use(express.json());
+// ─── Вспомогательные функции ────────────────────────────────────────────────
+async function hashPassword(password) {
+    return bcrypt.hash(password, 10);
+}
 
-app.use((req, res, next) => {
-    res.on('finish', () => {
-        console.log(`[${new Date().toISOString()}] [${req.method}] ${res.statusCode} ${req.path}`);
-        if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
-            console.log('Body:', req.body);
-        }
-    });
-    next();
-});
+async function verifyPassword(password, passwordHash) {
+    return bcrypt.compare(password, passwordHash);
+}
 
+function findUserOrFail(email, res) {
+    const user = users.find(u => u.email === email);
+    if (!user) {
+        res.status(404).json({ error: 'User not found' });
+        return null;
+    }
+    return user;
+}
+
+function findProductOrFail(id, res) {
+    const product = products.find(p => p.id === id);
+    if (!product) {
+        res.status(404).json({ error: 'Product not found' });
+        return null;
+    }
+    return product;
+}
+
+// ─── Swagger ─────────────────────────────────────────────────────────────────
 const swaggerOptions = {
     definition: {
         openapi: '3.0.0',
         info: {
-            title: 'API спортивного магазина',
+            title: 'API спортивного магазина с авторизацией',
             version: '1.0.0',
-            description: 'API для управления товарами спортивного магазина',
+            description: 'Практическое задание: авторизация + CRUD товаров',
         },
-        servers: [
-            {
-                url: `http://localhost:${port}`,
-                description: 'Локальный сервер',
-            },
-        ],
+        servers: [{ url: `http://localhost:${port}`, description: 'Локальный сервер' }],
     },
     apis: ['./server.js'],
 };
 
 const swaggerSpec = swaggerJsdoc(swaggerOptions);
+
+// ─── Middleware ───────────────────────────────────────────────────────────────
+app.use(cors());
+app.use(express.json());
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
+app.use((req, res, next) => {
+    res.on('finish', () => {
+        console.log(`[${new Date().toISOString()}] [${req.method}] ${res.statusCode} ${req.path}`);
+        if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+            // не логируем пароль в открытом виде
+            const safeBody = { ...req.body };
+            if (safeBody.password) safeBody.password = '***';
+            console.log('Body:', safeBody);
+        }
+    });
+    next();
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+//  AUTH ROUTES
+// ════════════════════════════════════════════════════════════════════════════
 
 /**
  * @swagger
  * components:
  *   schemas:
+ *     RegisterInput:
+ *       type: object
+ *       required: [email, first_name, last_name, password]
+ *       properties:
+ *         email:
+ *           type: string
+ *           example: ivan@example.com
+ *         first_name:
+ *           type: string
+ *           example: Иван
+ *         last_name:
+ *           type: string
+ *           example: Иванов
+ *         password:
+ *           type: string
+ *           example: qwerty123
+ *     LoginInput:
+ *       type: object
+ *       required: [email, password]
+ *       properties:
+ *         email:
+ *           type: string
+ *           example: ivan@example.com
+ *         password:
+ *           type: string
+ *           example: qwerty123
  *     Product:
  *       type: object
- *       required:
- *         - name
- *         - category
- *         - description
- *         - price
- *         - stock
+ *       required: [title, category, description, price]
  *       properties:
  *         id:
  *           type: string
- *           description: Автоматически сгенерированный ID товара
- *         name:
+ *         title:
  *           type: string
- *           description: Название товара
  *         category:
  *           type: string
- *           description: Категория товара
  *         description:
  *           type: string
- *           description: Описание товара
  *         price:
  *           type: number
- *           description: Цена товара в рублях
- *         stock:
- *           type: integer
- *           description: Количество на складе
- *         rating:
- *           type: number
- *           description: Рейтинг товара (0-5)
- *         image:
- *           type: string
- *           description: Путь к изображению
- *       example:
- *         id: "abc123"
- *         name: "Протеин Gold"
- *         category: "Спортпит"
- *         description: "Белковая бомба"
- *         price: 2990
- *         stock: 999
- *         rating: 4.8
- *         image: "/images/1.jpg"
  */
+
+/**
+ * @swagger
+ * /api/auth/register:
+ *   post:
+ *     summary: Регистрация пользователя
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/RegisterInput'
+ *     responses:
+ *       201:
+ *         description: Пользователь успешно создан
+ *       400:
+ *         description: Некорректные данные или email уже занят
+ */
+app.post('/api/auth/register', async (req, res) => {
+    const { email, first_name, last_name, password } = req.body;
+
+    if (!email || !first_name || !last_name || !password) {
+        return res.status(400).json({ error: 'email, first_name, last_name and password are required' });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+        return res.status(400).json({ error: 'Invalid email format' });
+    }
+
+    if (users.find(u => u.email === email)) {
+        return res.status(400).json({ error: 'Email already registered' });
+    }
+
+    const newUser = {
+        id: nanoid(6),
+        email,
+        first_name,
+        last_name,
+        password: await hashPassword(password)
+    };
+
+    users.push(newUser);
+
+    // не возвращаем хеш пароля клиенту
+    const { password: _, ...userWithoutPassword } = newUser;
+    res.status(201).json(userWithoutPassword);
+});
+
+/**
+ * @swagger
+ * /api/auth/login:
+ *   post:
+ *     summary: Вход в систему
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/LoginInput'
+ *     responses:
+ *       200:
+ *         description: Успешный вход
+ *       400:
+ *         description: Отсутствуют обязательные поля
+ *       401:
+ *         description: Неверные учётные данные
+ *       404:
+ *         description: Пользователь не найден
+ */
+app.post('/api/auth/login', async (req, res) => {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+        return res.status(400).json({ error: 'email and password are required' });
+    }
+
+    const user = findUserOrFail(email, res);
+    if (!user) return;
+
+    const isAuthenticated = await verifyPassword(password, user.password);
+    if (!isAuthenticated) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    res.status(200).json({ login: true, email: user.email, first_name: user.first_name });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+//  PRODUCTS ROUTES
+// ════════════════════════════════════════════════════════════════════════════
 
 /**
  * @swagger
  * /api/products:
  *   get:
- *     summary: Возвращает список всех товаров
+ *     summary: Получить список товаров
  *     tags: [Products]
  *     parameters:
  *       - in: query
@@ -208,28 +255,20 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
  *         name: minPrice
  *         schema:
  *           type: number
- *         description: Минимальная цена
  *       - in: query
  *         name: maxPrice
  *         schema:
  *           type: number
- *         description: Максимальная цена
  *     responses:
  *       200:
  *         description: Список товаров
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Product'
  */
-app.get("/api/products", (req, res) => {
+app.get('/api/products', (req, res) => {
     const { category, minPrice, maxPrice } = req.query;
     let filtered = [...products];
-    
+
     if (category) {
-        filtered = filtered.filter(p => p.category === category);
+        filtered = filtered.filter(p => p.category.toLowerCase() === category.toLowerCase());
     }
     if (minPrice) {
         filtered = filtered.filter(p => p.price >= Number(minPrice));
@@ -237,7 +276,7 @@ app.get("/api/products", (req, res) => {
     if (maxPrice) {
         filtered = filtered.filter(p => p.price <= Number(maxPrice));
     }
-    
+
     res.json(filtered);
 });
 
@@ -245,30 +284,23 @@ app.get("/api/products", (req, res) => {
  * @swagger
  * /api/products/{id}:
  *   get:
- *     summary: Получает товар по ID
+ *     summary: Получить товар по ID
  *     tags: [Products]
  *     parameters:
  *       - in: path
  *         name: id
+ *         required: true
  *         schema:
  *           type: string
- *         required: true
- *         description: ID товара
  *     responses:
  *       200:
  *         description: Данные товара
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Product'
  *       404:
  *         description: Товар не найден
  */
-app.get("/api/products/:id", (req, res) => {
-    const product = products.find(p => p.id === req.params.id);
-    if (!product) {
-        return res.status(404).json({ error: "Product not found" });
-    }
+app.get('/api/products/:id', (req, res) => {
+    const product = findProductOrFail(req.params.id, res);
+    if (!product) return;
     res.json(product);
 });
 
@@ -276,63 +308,39 @@ app.get("/api/products/:id", (req, res) => {
  * @swagger
  * /api/products:
  *   post:
- *     summary: Создает новый товар
+ *     summary: Создать товар
  *     tags: [Products]
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
- *             type: object
- *             required:
- *               - name
- *               - category
- *               - description
- *               - price
- *               - stock
- *             properties:
- *               name:
- *                 type: string
- *               category:
- *                 type: string
- *               description:
- *                 type: string
- *               price:
- *                 type: number
- *               stock:
- *                 type: integer
- *               rating:
- *                 type: number
- *               image:
- *                 type: string
+ *             $ref: '#/components/schemas/Product'
  *     responses:
  *       201:
- *         description: Товар успешно создан
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Product'
+ *         description: Товар создан
  *       400:
- *         description: Ошибка в теле запроса
+ *         description: Некорректные данные
  */
-app.post("/api/products", (req, res) => {
-    const { name, category, description, price, stock, rating, image } = req.body;
-    
-    if (!name || !category || !description || !price || !stock) {
-        return res.status(400).json({ error: "Missing required fields" });
+app.post('/api/products', (req, res) => {
+    const { title, category, description, price } = req.body;
+
+    if (!title || !category || !description || price === undefined) {
+        return res.status(400).json({ error: 'title, category, description and price are required' });
     }
-    
+
+    if (isNaN(Number(price)) || Number(price) < 0) {
+        return res.status(400).json({ error: 'price must be a non-negative number' });
+    }
+
     const newProduct = {
         id: nanoid(6),
-        name: name.trim(),
-        category,
-        description,
-        price: Number(price),
-        stock: Number(stock),
-        rating: rating ? Number(rating) : 0,
-        image: image || '/images/default.jpg'
+        title: title.trim(),
+        category: category.trim(),
+        description: description.trim(),
+        price: Number(price)
     };
-    
+
     products.push(newProduct);
     res.status(201).json(newProduct);
 });
@@ -340,65 +348,48 @@ app.post("/api/products", (req, res) => {
 /**
  * @swagger
  * /api/products/{id}:
- *   patch:
- *     summary: Обновляет данные товара
+ *   put:
+ *     summary: Обновить параметры товара
  *     tags: [Products]
  *     parameters:
  *       - in: path
  *         name: id
+ *         required: true
  *         schema:
  *           type: string
- *         required: true
- *         description: ID товара
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
- *             type: object
- *             properties:
- *               name:
- *                 type: string
- *               category:
- *                 type: string
- *               description:
- *                 type: string
- *               price:
- *                 type: number
- *               stock:
- *                 type: integer
- *               rating:
- *                 type: number
- *               image:
- *                 type: string
+ *             $ref: '#/components/schemas/Product'
  *     responses:
  *       200:
- *         description: Обновленный товар
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Product'
+ *         description: Обновлённый товар
  *       400:
- *         description: Нет данных для обновления
+ *         description: Некорректные данные
  *       404:
  *         description: Товар не найден
  */
-app.patch("/api/products/:id", (req, res) => {
-    const product = products.find(p => p.id === req.params.id);
-    if (!product) {
-        return res.status(404).json({ error: "Product not found" });
+app.put('/api/products/:id', (req, res) => {
+    const product = findProductOrFail(req.params.id, res);
+    if (!product) return;
+
+    const { title, category, description, price } = req.body;
+
+    if (!title || !category || !description || price === undefined) {
+        return res.status(400).json({ error: 'title, category, description and price are required for full update' });
     }
-    
-    const { name, category, description, price, stock, rating, image } = req.body;
-    
-    if (name) product.name = name.trim();
-    if (category) product.category = category;
-    if (description) product.description = description;
-    if (price !== undefined) product.price = Number(price);
-    if (stock !== undefined) product.stock = Number(stock);
-    if (rating !== undefined) product.rating = Number(rating);
-    if (image) product.image = image;
-    
+
+    if (isNaN(Number(price)) || Number(price) < 0) {
+        return res.status(400).json({ error: 'price must be a non-negative number' });
+    }
+
+    product.title = title.trim();
+    product.category = category.trim();
+    product.description = description.trim();
+    product.price = Number(price);
+
     res.json(product);
 });
 
@@ -406,48 +397,43 @@ app.patch("/api/products/:id", (req, res) => {
  * @swagger
  * /api/products/{id}:
  *   delete:
- *     summary: Удаляет товар
+ *     summary: Удалить товар
  *     tags: [Products]
  *     parameters:
  *       - in: path
  *         name: id
+ *         required: true
  *         schema:
  *           type: string
- *         required: true
- *         description: ID товара
  *     responses:
  *       204:
- *         description: Товар успешно удален (нет тела ответа)
+ *         description: Товар удалён
  *       404:
  *         description: Товар не найден
  */
-app.delete("/api/products/:id", (req, res) => {
+app.delete('/api/products/:id', (req, res) => {
     const index = products.findIndex(p => p.id === req.params.id);
     if (index === -1) {
-        return res.status(404).json({ error: "Product not found" });
+        return res.status(404).json({ error: 'Product not found' });
     }
-    
+
     products.splice(index, 1);
     res.status(204).send();
 });
 
-// 404 для всех остальных маршрутов
+// ─── 404 & Error handlers ─────────────────────────────────────────────────────
 app.use((req, res) => {
-    res.status(404).json({ error: "Not found" });
+    res.status(404).json({ error: 'Not found' });
 });
 
-// Глобальный обработчик ошибок
 app.use((err, req, res, next) => {
-    console.error("Unhandled error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    console.error('Unhandled error:', err);
+    res.status(500).json({ error: 'Internal server error' });
 });
 
+// ─── Start ────────────────────────────────────────────────────────────────────
 app.listen(port, '127.0.0.1', () => {
     console.log(`Сервер запущен на http://127.0.0.1:${port}`);
-    console.log(`Товаров в базе: ${products.length}`);
-    console.log(`Swagger UI доступен по адресу http://127.0.0.1:${port}/api-docs`);
+    console.log(`Пользователей: ${users.length} | Товаров: ${products.length}`);
+    console.log(`Swagger UI: http://127.0.0.1:${port}/api-docs`);
 });
-
-setInterval(() => {
-    console.log("Сервер жив...");
-}, 5000);
