@@ -10,16 +10,38 @@ const swaggerUi = require('swagger-ui-express');
 const app = express();
 const port = 3000;
 
-const JWT_SECRET = 'access_secret';
+const ACCESS_SECRET = 'access_secret';
+const REFRESH_SECRET = 'refresh_secret';
 const ACCESS_EXPIRES_IN = '15m';
+const REFRESH_EXPIRES_IN = '7d';
 
+// ─── In-memory хранилища ────────────────────────────────────────────────────
 let users = [];
 let products = [
     { id: nanoid(6), title: 'Протеин Gold', category: 'Спортпит', description: 'Белковая бомба', price: 2990 },
     { id: nanoid(6), title: 'Креатин Дядя Ваня', category: 'Спортпит', description: 'Мощная штучка', price: 2000 },
     { id: nanoid(6), title: 'Штанга', category: 'Спорт-инвентарь', description: '20 kg', price: 1290 }
 ];
+const refreshTokens = new Set();
 
+// ─── Генерация токенов ───────────────────────────────────────────────────────
+function generateAccessToken(user) {
+    return jwt.sign(
+        { sub: user.id, email: user.email, first_name: user.first_name },
+        ACCESS_SECRET,
+        { expiresIn: ACCESS_EXPIRES_IN }
+    );
+}
+
+function generateRefreshToken(user) {
+    return jwt.sign(
+        { sub: user.id, email: user.email },
+        REFRESH_SECRET,
+        { expiresIn: REFRESH_EXPIRES_IN }
+    );
+}
+
+// ─── Вспомогательные функции ────────────────────────────────────────────────
 async function hashPassword(password) {
     return bcrypt.hash(password, 10);
 }
@@ -40,6 +62,7 @@ function findProductOrFail(id, res) {
     return product;
 }
 
+// ─── JWT Middleware ───────────────────────────────────────────────────────────
 function authMiddleware(req, res, next) {
     const header = req.headers.authorization || '';
     const [scheme, token] = header.split(' ');
@@ -49,17 +72,18 @@ function authMiddleware(req, res, next) {
     }
 
     try {
-        req.user = jwt.verify(token, JWT_SECRET);
+        req.user = jwt.verify(token, ACCESS_SECRET);
         next();
     } catch (err) {
         return res.status(401).json({ error: 'Invalid or expired token' });
     }
 }
 
+// ─── Swagger ──────────────────────────────────────────────────────────────────
 const swaggerOptions = {
     definition: {
         openapi: '3.0.0',
-        info: { title: 'API спортивного магазина с JWT', version: '2.0.0', description: 'Практика 7-8' },
+        info: { title: 'API спортивного магазина с JWT', version: '3.0.0', description: 'Практика 7-8-9' },
         servers: [{ url: `http://localhost:${port}` }],
         components: {
             securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' } }
@@ -70,6 +94,7 @@ const swaggerOptions = {
 
 const swaggerSpec = swaggerJsdoc(swaggerOptions);
 
+// ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json());
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
@@ -85,6 +110,10 @@ app.use((req, res, next) => {
     });
     next();
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+//  AUTH ROUTES
+// ════════════════════════════════════════════════════════════════════════════
 
 /**
  * @swagger
@@ -116,6 +145,13 @@ app.use((req, res, next) => {
  *         password:
  *           type: string
  *           example: qwerty123
+ *     TokenPair:
+ *       type: object
+ *       properties:
+ *         accessToken:
+ *           type: string
+ *         refreshToken:
+ *           type: string
  *     Product:
  *       type: object
  *       required: [title, category, description, price]
@@ -176,7 +212,7 @@ app.post('/api/auth/register', async (req, res) => {
  * @swagger
  * /api/auth/login:
  *   post:
- *     summary: Вход в систему — возвращает JWT accessToken
+ *     summary: Вход в систему — возвращает пару access + refresh токенов
  *     tags: [Auth]
  *     requestBody:
  *       required: true
@@ -190,10 +226,7 @@ app.post('/api/auth/register', async (req, res) => {
  *         content:
  *           application/json:
  *             schema:
- *               type: object
- *               properties:
- *                 accessToken:
- *                   type: string
+ *               $ref: '#/components/schemas/TokenPair'
  *       400:
  *         description: Отсутствуют обязательные поля
  *       401:
@@ -215,13 +248,70 @@ app.post('/api/auth/login', async (req, res) => {
         return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const accessToken = jwt.sign(
-        { sub: user.id, email: user.email, first_name: user.first_name },
-        JWT_SECRET,
-        { expiresIn: ACCESS_EXPIRES_IN }
-    );
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
+    refreshTokens.add(refreshToken);
 
-    res.status(200).json({ accessToken });
+    res.status(200).json({ accessToken, refreshToken });
+});
+
+/**
+ * @swagger
+ * /api/auth/refresh:
+ *   post:
+ *     summary: Обновление пары токенов по refresh-токену
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [refreshToken]
+ *             properties:
+ *               refreshToken:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Новая пара токенов
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/TokenPair'
+ *       400:
+ *         description: refreshToken отсутствует
+ *       401:
+ *         description: Невалидный или устаревший refresh-токен
+ */
+app.post('/api/auth/refresh', (req, res) => {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+        return res.status(400).json({ error: 'refreshToken is required' });
+    }
+
+    if (!refreshTokens.has(refreshToken)) {
+        return res.status(401).json({ error: 'Invalid refresh token' });
+    }
+
+    try {
+        const payload = jwt.verify(refreshToken, REFRESH_SECRET);
+        const user = users.find(u => u.id === payload.sub);
+
+        if (!user) {
+            return res.status(401).json({ error: 'User not found' });
+        }
+
+        // Ротация: старый удаляем, новый создаём
+        refreshTokens.delete(refreshToken);
+        const newAccessToken = generateAccessToken(user);
+        const newRefreshToken = generateRefreshToken(user);
+        refreshTokens.add(newRefreshToken);
+
+        res.json({ accessToken: newAccessToken, refreshToken: newRefreshToken });
+    } catch (err) {
+        return res.status(401).json({ error: 'Invalid or expired refresh token' });
+    }
 });
 
 /**
@@ -247,6 +337,10 @@ app.get('/api/auth/me', authMiddleware, (req, res) => {
     const { password: _, ...safe } = user;
     res.json(safe);
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+//  PRODUCTS ROUTES
+// ════════════════════════════════════════════════════════════════════════════
 
 /**
  * @swagger
@@ -286,7 +380,7 @@ app.get('/api/products', (req, res) => {
  * @swagger
  * /api/products/{id}:
  *   get:
- *     summary: Получить товар по ID (требует токен)
+ *     summary: Получить товар по ID (🔒 требует токен)
  *     tags: [Products]
  *     security:
  *       - bearerAuth: []
@@ -355,7 +449,7 @@ app.post('/api/products', (req, res) => {
  * @swagger
  * /api/products/{id}:
  *   put:
- *     summary: Обновить товар (требует токен)
+ *     summary: Обновить товар (🔒 требует токен)
  *     tags: [Products]
  *     security:
  *       - bearerAuth: []
@@ -405,7 +499,7 @@ app.put('/api/products/:id', authMiddleware, (req, res) => {
  * @swagger
  * /api/products/{id}:
  *   delete:
- *     summary: Удалить товар (требует токен)
+ *     summary: Удалить товар (🔒 требует токен)
  *     tags: [Products]
  *     security:
  *       - bearerAuth: []
@@ -431,6 +525,7 @@ app.delete('/api/products/:id', authMiddleware, (req, res) => {
     res.status(204).send();
 });
 
+// ─── 404 & Error handlers ─────────────────────────────────────────────────────
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
 app.use((err, req, res, next) => {
@@ -438,6 +533,7 @@ app.use((err, req, res, next) => {
     res.status(500).json({ error: 'Internal server error' });
 });
 
+// ─── Start ────────────────────────────────────────────────────────────────────
 app.listen(port, '127.0.0.1', () => {
     console.log(`Сервер запущен на http://127.0.0.1:${port}`);
     console.log(`Пользователей: ${users.length} | Товаров: ${products.length}`);
